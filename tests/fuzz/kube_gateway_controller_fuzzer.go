@@ -15,11 +15,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// nolint: golint
 package gateway
 
 import (
 	"fmt"
+
 	fuzz "github.com/AdaLogics/go-fuzz-headers"
 )
 
@@ -68,6 +68,6 @@ func ConvertResourcesFuzz(data []byte) int {
 	if err != nil {
 		return 0
 	}
-	_ = convertResources(r)
+	_ = convertResources(*r)
 	return 1
 }

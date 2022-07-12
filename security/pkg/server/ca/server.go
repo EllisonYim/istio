@@ -47,6 +47,7 @@ type CertificateAuthority interface {
 // Server implements IstioCAService and IstioCertificateService and provides the services on the
 // specified port.
 type Server struct {
+	pb.UnimplementedIstioCertificateServiceServer
 	monitoring     monitoringMetrics
 	Authenticators []security.Authenticator
 	ca             CertificateAuthority
@@ -69,7 +70,8 @@ func getConnectionAddress(ctx context.Context) string {
 // the validity duration is the ValidityDuration in request, or default value if the given duration is invalid.
 // it is signed by the CA signing key.
 func (s *Server) CreateCertificate(ctx context.Context, request *pb.IstioCertificateRequest) (
-	*pb.IstioCertificateResponse, error) {
+	*pb.IstioCertificateResponse, error,
+) {
 	s.monitoring.CSR.Increment()
 	caller := Authenticate(ctx, s.Authenticators)
 	if caller == nil {
@@ -142,7 +144,8 @@ func (s *Server) Register(grpcServer *grpc.Server) {
 
 // New creates a new instance of `IstioCAServiceServer`
 func New(ca CertificateAuthority, ttl time.Duration,
-	authenticators []security.Authenticator) (*Server, error) {
+	authenticators []security.Authenticator,
+) (*Server, error) {
 	certBundle := ca.GetCAKeyCertBundle()
 	if len(certBundle.GetRootCertPem()) != 0 {
 		recordCertsExpiry(certBundle)

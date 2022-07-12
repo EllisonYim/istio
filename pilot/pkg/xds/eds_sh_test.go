@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -259,8 +259,8 @@ func verifySplitHorizonResponse(t *testing.T, s *xds.FakeDiscoveryServer, networ
 func initRegistry(server *xds.FakeDiscoveryServer, networkNum int, gatewaysIP []string, numOfEndpoints int) {
 	clusterID := cluster.ID(fmt.Sprintf("cluster%d", networkNum))
 	networkID := network.ID(fmt.Sprintf("network%d", networkNum))
-	memRegistry := memory.NewServiceDiscovery(nil)
-	memRegistry.EDSUpdater = server.Discovery
+	memRegistry := memory.NewServiceDiscovery()
+	memRegistry.XdsUpdater = server.Discovery
 
 	server.Env().ServiceDiscovery.(*aggregate.Controller).AddRegistry(serviceregistry.Simple{
 		ClusterID:        clusterID,
@@ -294,7 +294,7 @@ func initRegistry(server *xds.FakeDiscoveryServer, networkNum int, gatewaysIP []
 
 	// Explicit test service, in the v2 memory registry. Similar with mock.MakeService,
 	// but easier to read.
-	memRegistry.AddService("service5.default.svc.cluster.local", &model.Service{
+	memRegistry.AddService(&model.Service{
 		Hostname:       "service5.default.svc.cluster.local",
 		DefaultAddress: "10.10.0.1",
 		Ports: []*model.Port{

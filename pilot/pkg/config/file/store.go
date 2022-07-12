@@ -46,6 +46,7 @@ import (
 	"istio.io/istio/pkg/config/schema/collection"
 	schemaresource "istio.io/istio/pkg/config/schema/resource"
 	"istio.io/istio/pkg/kube"
+	"istio.io/istio/pkg/util/sets"
 	"istio.io/pkg/log"
 )
 
@@ -175,9 +176,9 @@ func (s *KubeSource) ContentNames() map[string]struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := make(map[string]struct{})
+	result := sets.New()
 	for n := range s.byFile {
-		result[n] = struct{}{}
+		result.Insert(n)
 	}
 
 	return result
@@ -210,8 +211,8 @@ func (s *KubeSource) ApplyContent(name, yamlText string) error {
 			if err != nil {
 				_, err = s.inner.Create(*r.config)
 				if err != nil {
-					return fmt.Errorf("cannot store config %v from reader: %s",
-						r.config.Meta, err)
+					return fmt.Errorf("cannot store config %s/%s %s from reader: %s",
+						r.schema.Resource().Version(), r.schema.Resource().Kind(), r.fullName(), err)
 				}
 			}
 			s.shas[key] = r.sha
@@ -329,7 +330,7 @@ func (s *KubeSource) parseChunk(r *collection.Schemas, name string, lineNum int,
 		return kubeResource{}, fmt.Errorf("unable to parse resource with no group, version and kind")
 	}
 
-	schema, found := r.FindByGroupVersionKind(schemaresource.FromKubernetesGVK(groupVersionKind))
+	schema, found := r.FindByGroupVersionAliasesKind(schemaresource.FromKubernetesGVK(groupVersionKind))
 
 	if !found {
 		return kubeResource{}, &unknownSchemaError{
@@ -364,7 +365,10 @@ func (s *KubeSource) parseChunk(r *collection.Schemas, name string, lineNum int,
 	if err != nil {
 		return kubeResource{}, fmt.Errorf("failed parsing JSON for built-in type: %v", err)
 	}
-	objMeta := obj.(metav1.Object)
+	objMeta, ok := obj.(metav1.Object)
+	if !ok {
+		return kubeResource{}, errors.New("failed to assert type of object metadata")
+	}
 
 	// If namespace is blank and we have a default set, fill in the default
 	// (This mirrors the behavior if you kubectl apply a resource without a namespace defined)
@@ -456,11 +460,7 @@ func TranslateObject(obj *unstructured.Unstructured, domainSuffix string, schema
 	m := obj
 	return &config.Config{
 		Meta: config.Meta{
-			GroupVersionKind: config.GroupVersionKind{
-				Group:   m.GetObjectKind().GroupVersionKind().Group,
-				Version: m.GetObjectKind().GroupVersionKind().Version,
-				Kind:    m.GetObjectKind().GroupVersionKind().Kind,
-			},
+			GroupVersionKind:  schema.Resource().GroupVersionKind(),
 			UID:               string(m.GetUID()),
 			Name:              m.GetName(),
 			Namespace:         m.GetNamespace(),

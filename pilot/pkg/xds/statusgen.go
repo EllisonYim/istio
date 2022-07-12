@@ -67,8 +67,7 @@ func NewStatusGen(s *DiscoveryServer) *StatusGen {
 // - connection status
 // - NACKs
 // We can also expose ACKS.
-func (sg *StatusGen) Generate(proxy *model.Proxy, push *model.PushContext, w *model.WatchedResource,
-	updates *model.PushRequest) (model.Resources, model.XdsLogDetails, error) {
+func (sg *StatusGen) Generate(proxy *model.Proxy, w *model.WatchedResource, req *model.PushRequest) (model.Resources, model.XdsLogDetails, error) {
 	res := model.Resources{}
 
 	switch w.TypeUrl {
@@ -113,6 +112,7 @@ func (sg *StatusGen) debugSyncz() model.Resources {
 		v3.RouteType,
 		v3.EndpointType,
 		v3.ClusterType,
+		v3.ExtensionConfigurationType,
 	}
 
 	for _, con := range sg.Server.Clients() {
@@ -134,7 +134,8 @@ func (sg *StatusGen) debugSyncz() model.Resources {
 			}
 			clientConfig := &status.ClientConfig{
 				Node: &core.Node{
-					Id: con.proxy.ID,
+					Id:       con.proxy.ID,
+					Metadata: con.proxy.Metadata.ToStruct(),
 				},
 				GenericXdsConfigs: xdsConfigs,
 			}
@@ -167,7 +168,7 @@ func (sg *StatusGen) debugConfigDump(proxyID string) (model.Resources, error) {
 		return nil, fmt.Errorf("config dump could not find connection for proxyID %q", proxyID)
 	}
 
-	dump, err := sg.Server.configDump(conn)
+	dump, err := sg.Server.configDump(conn, false)
 	if err != nil {
 		return nil, err
 	}

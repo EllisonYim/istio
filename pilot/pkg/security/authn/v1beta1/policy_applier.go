@@ -16,6 +16,7 @@ package v1beta1
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -30,6 +31,7 @@ import (
 
 	authn_alpha "istio.io/api/authentication/v1alpha1"
 	authn_filter "istio.io/api/envoy/config/filter/http/authn/v2alpha1"
+	meshconfig "istio.io/api/mesh/v1alpha1"
 	"istio.io/api/security/v1beta1"
 	"istio.io/istio/pilot/pkg/extensionproviders"
 	"istio.io/istio/pilot/pkg/features"
@@ -100,13 +102,17 @@ func (a *v1beta1PolicyApplier) setAuthnFilterForRequestAuthn(config *authn_filte
 	config.JwtOutputPayloadLocations = nil
 	p := config.Policy
 	// Reset origins to use with beta API
+	// nolint: staticcheck
 	p.Origins = []*authn_alpha.OriginAuthenticationMethod{}
 	// Always set to true for beta API, as it doesn't doe rejection on missing token.
+	// nolint: staticcheck
 	p.OriginIsOptional = true
 
 	// Always bind request.auth.principal from JWT origin. In v2 policy, authorization config specifies what principal to
 	// choose from instead, rather than in authn config.
+	// nolint: staticcheck
 	p.PrincipalBinding = authn_alpha.PrincipalBinding_USE_ORIGIN
+	// nolint: staticcheck
 	for _, jwt := range a.processedJwtRules {
 		p.Origins = append(p.Origins, &authn_alpha.OriginAuthenticationMethod{
 			Jwt: &authn_alpha.Jwt{
@@ -145,11 +151,19 @@ func (a *v1beta1PolicyApplier) AuthNFilter(forSidecar bool) *http_conn.HttpFilte
 func (a *v1beta1PolicyApplier) InboundMTLSSettings(endpointPort uint32, node *model.Proxy, trustDomainAliases []string) plugin.MTLSSettings {
 	effectiveMTLSMode := a.GetMutualTLSModeForPort(endpointPort)
 	authnLog.Debugf("InboundFilterChain: build inbound filter change for %v:%d in %s mode", node.ID, endpointPort, effectiveMTLSMode)
+	var mc *meshconfig.MeshConfig
+	if a.push != nil {
+		mc = a.push.Mesh
+	}
+	// Configure TLS version based on meshconfig TLS API.
+	minTLSVersion := authn_utils.GetMinTLSVersion(mc.GetMeshMTLS().GetMinProtocolVersion())
 	return plugin.MTLSSettings{
 		Port: endpointPort,
 		Mode: effectiveMTLSMode,
-		TCP:  authn_utils.BuildInboundTLS(effectiveMTLSMode, node, networking.ListenerProtocolTCP, trustDomainAliases),
-		HTTP: authn_utils.BuildInboundTLS(effectiveMTLSMode, node, networking.ListenerProtocolHTTP, trustDomainAliases),
+		TCP: authn_utils.BuildInboundTLS(effectiveMTLSMode, node, networking.ListenerProtocolTCP,
+			trustDomainAliases, minTLSVersion),
+		HTTP: authn_utils.BuildInboundTLS(effectiveMTLSMode, node, networking.ListenerProtocolHTTP,
+			trustDomainAliases, minTLSVersion),
 	}
 }
 
@@ -157,7 +171,8 @@ func (a *v1beta1PolicyApplier) InboundMTLSSettings(endpointPort uint32, node *mo
 func NewPolicyApplier(rootNamespace string,
 	jwtPolicies []*config.Config,
 	peerPolicies []*config.Config,
-	push *model.PushContext) authn.PolicyApplier {
+	push *model.PushContext,
+) authn.PolicyApplier {
 	processedJwtRules := []*v1beta1.JWTRule{}
 
 	// TODO(diemtvu) should we need to deduplicate JWT with the same issuer.
@@ -226,13 +241,12 @@ func convertToEnvoyJwtConfig(jwtRules []*v1beta1.JWTRule, push *model.PushContex
 			// TODO: Implement the logic to auto-generate the cluster so that when the flag is enabled,
 			// it will always let envoy to fetch the jwks for consistent behavior.
 			u, _ := url.Parse(jwtRule.JwksUri)
-			hostAndPort := strings.Split(u.Host, ":")
-			host := hostAndPort[0]
+			host, hostPort, _ := net.SplitHostPort(u.Host)
 			// TODO: Default port based on scheme ?
 			port := 80
-			if len(hostAndPort) == 2 {
+			if hostPort != "" {
 				var err error
-				if port, err = strconv.Atoi(hostAndPort[1]); err != nil {
+				if port, err = strconv.Atoi(hostPort); err != nil {
 					port = 80 // If port is not specified or there is an error in parsing default to 80.
 				}
 			}

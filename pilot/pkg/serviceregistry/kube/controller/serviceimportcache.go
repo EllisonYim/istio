@@ -32,7 +32,8 @@ import (
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
-	"istio.io/istio/pkg/config/schema/gvk"
+	"istio.io/istio/pkg/config/schema/kind"
+	kubelib "istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/mcs"
 )
 
@@ -68,6 +69,7 @@ type serviceImportCache interface {
 func newServiceImportCache(c *Controller) serviceImportCache {
 	if features.EnableMCSHost {
 		dInformer := c.client.DynamicInformer().ForResource(mcs.ServiceImportGVR)
+		_ = dInformer.Informer().SetTransform(kubelib.StripUnusedFields)
 		sic := &serviceImportCacheImpl{
 			Controller: c,
 			informer:   dInformer.Informer(),
@@ -101,32 +103,40 @@ func (ic *serviceImportCacheImpl) onServiceEvent(svc *model.Service, event model
 		return
 	}
 
-	namespacedName := namespacedNameForService(svc)
+	// This method is called concurrently from each cluster's queue. Process it in `this` cluster's queue
+	// in order to synchronize event processing.
+	ic.queue.Push(func() error {
+		namespacedName := namespacedNameForService(svc)
 
-	// Lookup the previous MCS service if there was one.
-	mcsHost := serviceClusterSetLocalHostname(namespacedName)
-	prevMcsService := ic.GetService(mcsHost)
+		// Lookup the previous MCS service if there was one.
+		mcsHost := serviceClusterSetLocalHostname(namespacedName)
+		prevMcsService := ic.GetService(mcsHost)
 
-	// Get the ClusterSet VIPs for this service in this cluster. Will only be populated if the
-	// service has a ServiceImport in this cluster.
-	vips := ic.getClusterSetIPs(namespacedName)
+		// Get the ClusterSet VIPs for this service in this cluster. Will only be populated if the
+		// service has a ServiceImport in this cluster.
+		vips := ic.getClusterSetIPs(namespacedName)
+		name := namespacedName.Name
+		ns := namespacedName.Namespace
 
-	if event == model.EventDelete || len(vips) == 0 {
-		if prevMcsService != nil {
-			// There are no vips in this cluster. Just delete the MCS service now.
-			ic.deleteService(prevMcsService)
+		if len(vips) == 0 || (event == model.EventDelete &&
+			ic.opts.MeshServiceController.GetService(kube.ServiceHostname(name, ns, ic.opts.DomainSuffix)) == nil) {
+			if prevMcsService != nil {
+				// There are no vips in this cluster. Just delete the MCS service now.
+				ic.deleteService(prevMcsService)
+			}
+			return nil
 		}
-		return
-	}
 
-	if prevMcsService != nil {
-		event = model.EventUpdate
-	} else {
-		event = model.EventAdd
-	}
+		if prevMcsService != nil {
+			event = model.EventUpdate
+		} else {
+			event = model.EventAdd
+		}
 
-	mcsService := ic.genMCSService(svc, mcsHost, vips)
-	ic.addOrUpdateService(nil, mcsService, event, false)
+		mcsService := ic.genMCSService(svc, mcsHost, vips)
+		ic.addOrUpdateService(nil, mcsService, event, false)
+		return nil
+	})
 }
 
 func (ic *serviceImportCacheImpl) onServiceImportEvent(obj interface{}, event model.Event) error {
@@ -209,7 +219,7 @@ func (ic *serviceImportCacheImpl) doFullPush(mcsHost host.Name, ns string) {
 	pushReq := &model.PushRequest{
 		Full: true,
 		ConfigsUpdated: map[model.ConfigKey]struct{}{{
-			Kind:      gvk.ServiceEntry,
+			Kind:      kind.ServiceEntry,
 			Name:      mcsHost.String(),
 			Namespace: ns,
 		}: {}},
